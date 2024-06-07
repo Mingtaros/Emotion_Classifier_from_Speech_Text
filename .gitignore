@@ -163,3 +163,5 @@ cython_debug/
 
 ravdess-emotional-speech-audio/*
 !ravdess-emotional-speech-audio/.gitkeep
+emotion-text-dataset/*.csv
+!emotion-text-dataset/.gitkeep
