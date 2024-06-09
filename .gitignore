@@ -161,8 +161,7 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-ravdess-emotional-speech-audio/*
-ravdess-emotional-speech-audio-augmented/*
+data/*
 !ravdess-emotional-speech-audio/.gitkeep
 !ravdess-emotional-speech-audio-augmented/.gitkeep
 emotion-text-dataset/*.csv

@@ -56,6 +56,6 @@ def augment_and_concatenate_audio(input_dir, output_dir, sample_rate=48000):
             print(f"Saved augmented file to {output_file_path}")
 
 # Example usage
-input_dir = './ravdess-emotional-speech-audio/'
-output_dir = './ravdess-emotional-speech-audio-augmented/'
+input_dir = './data/ravdess-emotional-speech-audio/'
+output_dir = './data/ravdess-emotional-speech-audio-augmented/'
 augment_and_concatenate_audio(input_dir, output_dir)
