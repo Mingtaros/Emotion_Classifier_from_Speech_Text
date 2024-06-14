@@ -162,8 +162,8 @@ cython_debug/
 #.idea/
 
 data/*
-!ravdess-emotional-speech-audio/.gitkeep
-!ravdess-emotional-speech-audio-augmented/.gitkeep
+emotion-speech-dataset/*
+!emotion-speech-dataset/*/.gitkeep
 emotion-text-dataset/*.csv
 !emotion-text-dataset/.gitkeep
 models/*
