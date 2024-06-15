@@ -1,4 +1,5 @@
 # RAVDESS_Emotion_Detection
+Speech-based Emotion Classifier.
 
 ## Setup
 
