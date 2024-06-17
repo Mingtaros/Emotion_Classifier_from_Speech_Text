@@ -162,6 +162,7 @@ cython_debug/
 #.idea/
 
 emotion-speech-dataset/*
+output/*
 !emotion-speech-dataset/*/.gitkeep
 emotion-text-dataset/*.csv
 !emotion-text-dataset/.gitkeep
