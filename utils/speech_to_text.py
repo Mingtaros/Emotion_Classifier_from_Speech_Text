@@ -1,4 +1,5 @@
 import speech_recognition as sr
+import glob
 
 
 recognizer = sr.Recognizer()
@@ -7,10 +8,16 @@ def convert_speech_to_text(filename):
     with sr.AudioFile(filename) as source:
         audio = recognizer.record(source)
 
-    return recognizer.recognize_google(audio)
+    return recognizer.recognize_sphinx(audio)
 
 
 if __name__ == "__main__":
-    filename = "emotion-speech-dataset/augmented/remember.wav"
+    filename = "justin_recording/Recording_28_surprised.wav"
     text = convert_speech_to_text(filename)
-    print(text)
+    print(filename, "\n", text, "\n")
+    # for filename in glob.glob("justin_recording/*.wav"):
+    #     try:
+    #         text = convert_speech_to_text(filename)
+    #         print(filename, "\n", text, "\n")
+    #     except:
+    #         print(filename)

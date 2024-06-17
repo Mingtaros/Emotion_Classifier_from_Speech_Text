@@ -1,4 +1,5 @@
 import json
+import glob
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,13 +9,22 @@ import pandas as pd
 import tensorflow as tf
 import librosa
 
+from tqdm import tqdm
+from sklearn.metrics import confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from device_utils import check_gpu
 from speech_to_text import convert_speech_to_text
 # evaluate the overall system
 
-# PREPROCESSORS
-scaler = joblib.load("./models/scaler.pkl")
+# initialize necessary models
+SCALER_PATH = "./models/scaler.pkl"
+SPEECH_MODEL_PATH = "./models/speech_model.keras"
+TEXT_MODEL_PATH = "./models/torch_text_cnn_model_2024.06.17.18.48.01.pth"
 
+# PREPROCESSORS
+scaler = joblib.load(SCALER_PATH)
 def noise(data):
     noise_amp = 0.035*np.random.uniform()*np.amax(data)
     data = data + noise_amp*np.random.normal(size=data.shape[0])
@@ -68,7 +78,7 @@ def get_features(path):
     return result
 
 
-with open("./models/vocab2index.json", 'r') as f:
+with open("./models/vocab2index_Text.json", 'r') as f:
     vocab2index = json.load(f)
 
 def encode_sentence(text, vocab2index, max_len=128):
@@ -91,8 +101,16 @@ emotions_dict = {
     6: 'disgust'
 }
 
-SPEECH_MODEL_PATH = "models/speech_model.keras"
-TEXT_MODEL_PATH = "models/torch_text_cnn_model_2024.06.15.19.56.37.pth"
+reverse_emotions_dict = {
+    'surprised': 0,
+    'neutral': 1,
+    'happy': 2,
+    'sad': 3,
+    'angry': 4,
+    'fearful': 5,
+    'disgust': 6
+}
+
 device = check_gpu()
 
 class ConvolutionalModel(nn.Module):
@@ -128,7 +146,7 @@ class ConvolutionalModel(nn.Module):
 
 speech_model = tf.keras.models.load_model(SPEECH_MODEL_PATH)
 
-vocab_size = 17720
+vocab_size = len(vocab2index) # - 2 for "UNK" and ""
 text_model = ConvolutionalModel(vocab_size, output_size=len(emotions_dict)).to(device)
 text_model.load_state_dict(torch.load(TEXT_MODEL_PATH))
 text_model.eval()
@@ -157,15 +175,65 @@ def predict(speech_model, text_model, wav_file):
     return emotion_by_speech[0].numpy(), emotion_by_text.cpu().numpy()[0]
 
 
-def eval():
-    pass
+def confusion_matrix_visualize(conf_mat, title, filename):
+    cm = pd.DataFrame(conf_mat, index=emotions_dict.values(), columns=emotions_dict.values())
+    sns.heatmap(cm, annot=True)
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.title(title)
+    # plt.show()
+    plt.savefig(filename)
+
+
+def eval(speech_model, text_model):
+    # evaluate the performance of the models on justin recordings
+    justin_speeches = glob.glob("justin_recording/*.wav")
+
+    prediction_result = []
+
+    for justin_speech in tqdm(justin_speeches, total=len(justin_speeches)):
+        label = justin_speech.split("_")[-1].replace(".wav", "")
+        print(justin_speech)
+        label_encoded = reverse_emotions_dict[label]
+        speech_pred, text_pred = predict(speech_model, text_model, justin_speech)
+
+        prediction_result.append({
+            "filename": justin_speech.split("/")[-1],
+            "label": label,
+            "label_encoded": label_encoded,
+            "speech_prediction": emotions_dict[speech_pred],
+            "speech_prediction_encoded": speech_pred,
+            "text_prediction": emotions_dict[text_pred],
+            "text_prediction_encoded": text_pred,
+        })
+    
+    prediction_result = pd.DataFrame(prediction_result)
+    # get performance measures
+    speech_report = classification_report(prediction_result["label_encoded"], prediction_result["speech_prediction_encoded"], target_names=emotions_dict.values())
+    text_report = classification_report(prediction_result["label_encoded"], prediction_result["text_prediction_encoded"], target_names=emotions_dict.values())
+
+    speech_conf_mat = confusion_matrix(prediction_result["label_encoded"], prediction_result["speech_prediction_encoded"])
+    text_conf_mat = confusion_matrix(prediction_result["label_encoded"], prediction_result["text_prediction_encoded"])
+
+    print("====Speech Model Performance====")
+    print(speech_report)
+    print("=====Text Model Performance=====")
+    print(text_report)
+
+    confusion_matrix_visualize(speech_conf_mat, "Speech Model Confusion Matrix", "speech_conf_mat.png")
+    confusion_matrix_visualize(text_conf_mat, "Text Model Confusion Matrix", "text_conf_mat.png")
+    
+    # save prediction result
+    prediction_result.to_csv("justin_prediction_result.csv", index=False)
 
 
 if __name__ == "__main__":
-    wav_file = "emotion-speech-dataset/augmented/remember.wav"
+    # wav_file = "emotion-speech-dataset/augmented/remember.wav"
 
-    emotion_by_speech, emotion_by_text = predict(speech_model, text_model, wav_file)
+    # emotion_by_speech, emotion_by_text = predict(speech_model, text_model, wav_file)
 
-    print(emotion_by_speech, emotion_by_text)
-    print("Speech:", emotions_dict[emotion_by_speech])
-    print("Text  :", emotions_dict[emotion_by_text])
+    # print(emotion_by_speech, emotion_by_text)
+    # print("Speech:", emotions_dict[emotion_by_speech])
+    # print("Text  :", emotions_dict[emotion_by_text])
+
+    eval(speech_model, text_model)
