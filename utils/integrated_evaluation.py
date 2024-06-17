@@ -9,7 +9,7 @@ import tensorflow as tf
 import librosa
 
 from device_utils import check_gpu
-# from speech_to_text import pipe, convert_speech_to_text
+from speech_to_text import convert_speech_to_text
 # evaluate the overall system
 
 # PREPROCESSORS
@@ -147,8 +147,8 @@ def predict(speech_model, text_model, wav_file):
     predicted = speech_model.predict(scaled_features)
     emotion_by_speech = tf.argmax(predicted, axis=1)
 
-    # text_from_speech = convert_speech_to_text(pipe, wav_file)
-    text_from_speech = "Remember to Submit your Assignment"
+    text_from_speech = convert_speech_to_text(wav_file)
+    # text_from_speech = "Remember to Submit your Assignment"
     encoded_text = np.array(encode_sentence(text_from_speech, vocab2index, max_len=128))
     encoded_text = encoded_text.reshape(-1, len(encoded_text))
     predicted = text_model(torch.tensor(encoded_text).to(device))

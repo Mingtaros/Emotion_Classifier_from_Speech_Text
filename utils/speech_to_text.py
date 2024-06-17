@@ -1,26 +1,16 @@
-import librosa
-from transformers import pipeline
-from device_utils import check_gpu
+import speech_recognition as sr
 
 
-device = check_gpu()
-pipe = pipeline(
-    "automatic-speech-recognition",
-    model="openai/whisper-base",
-    device=device
-)
+recognizer = sr.Recognizer()
 
+def convert_speech_to_text(filename):
+    with sr.AudioFile(filename) as source:
+        audio = recognizer.record(source)
 
-def convert_speech_to_text(pipe, filename, sampling_rate=48000):
-    wave, _ = librosa.load(filename, sr=sampling_rate)
-    result = pipe({
-        "array": wave,
-        "sampling_rate": sampling_rate
-    })
-    return result["text"]
+    return recognizer.recognize_google(audio)
 
 
 if __name__ == "__main__":
     filename = "emotion-speech-dataset/augmented/remember.wav"
-    text = convert_speech_to_text(pipe, filename)
+    text = convert_speech_to_text(filename)
     print(text)
