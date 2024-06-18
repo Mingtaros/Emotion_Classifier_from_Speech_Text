@@ -20,8 +20,10 @@ from speech_to_text import convert_speech_to_text
 
 # initialize necessary models
 SCALER_PATH = "./models/scaler.pkl"
-SPEECH_MODEL_PATH = "./models/speech_model.keras"
+SPEECH_MODEL_PATH = "./models/best_speech_model.pth"
+SPEECH_MODEL_TYPE = "pytorch" # change to `pytorch` if using pytorch model, `keras` for keras model
 TEXT_MODEL_PATH = "./models/torch_text_cnn_model_2024.06.17.18.48.01.pth"
+TEXT_MODEL_TYPE = "pytorch" # change to `pytorch` if using pytorch model, `keras` for keras model
 
 # PREPROCESSORS
 scaler = joblib.load(SCALER_PATH)
@@ -42,29 +44,50 @@ def pitch(data, sampling_rate, pitch_factor=0.7):
 
 
 def extract_features(data, sample_rate):
-    # ZCR
-    result = np.array([])
-    zcr = np.mean(librosa.feature.zero_crossing_rate(y=data).T, axis=0)
-    result=np.hstack((result, zcr)) # stacking horizontally
+    features = []
 
-    # Chroma_stft
+    # Zero Crossing Rate
+    zcr = np.mean(librosa.feature.zero_crossing_rate(y=data).T, axis=0)
+    features.append(zcr)
+
+    # Chroma STFT
     stft = np.abs(librosa.stft(data))
     chroma_stft = np.mean(librosa.feature.chroma_stft(S=stft, sr=sample_rate).T, axis=0)
-    result = np.hstack((result, chroma_stft)) # stacking horizontally
+    features.append(chroma_stft)
 
     # MFCC
     mfcc = np.mean(librosa.feature.mfcc(y=data, sr=sample_rate).T, axis=0)
-    result = np.hstack((result, mfcc)) # stacking horizontally
+    features.append(mfcc)
 
     # Root Mean Square Value
     rms = np.mean(librosa.feature.rms(y=data).T, axis=0)
-    result = np.hstack((result, rms)) # stacking horizontally
+    features.append(rms)
 
-    # MelSpectogram
+    # MelSpectrogram
     mel = np.mean(librosa.feature.melspectrogram(y=data, sr=sample_rate).T, axis=0)
-    result = np.hstack((result, mel)) # stacking horizontally
+    features.append(mel)
     
-    return result
+    # Spectral Centroid
+    spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=data, sr=sample_rate).T, axis=0)
+    features.append(spectral_centroid)
+
+    # Spectral Bandwidth
+    spectral_bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=data, sr=sample_rate).T, axis=0)
+    features.append(spectral_bandwidth)
+
+    # Spectral Contrast
+    spectral_contrast = np.mean(librosa.feature.spectral_contrast(S=stft, sr=sample_rate).T, axis=0)
+    features.append(spectral_contrast)
+
+    # Spectral Roll-off
+    spectral_rolloff = np.mean(librosa.feature.spectral_rolloff(y=data, sr=sample_rate).T, axis=0)
+    features.append(spectral_rolloff)
+
+    # Tonnetz
+    tonnetz = np.mean(librosa.feature.tonnetz(y=librosa.effects.harmonic(data), sr=sample_rate).T, axis=0)
+    features.append(tonnetz)
+    
+    return np.hstack(features)
 
 
 def get_features(path):
@@ -113,6 +136,58 @@ reverse_emotions_dict = {
 
 device = check_gpu()
 
+class CNN_LSTMModel(nn.Module):
+    def __init__(self):
+        super(CNN_LSTMModel, self).__init__()
+        self.conv1 = nn.Conv1d(1, 256, kernel_size=5, stride=1, padding=2)
+        self.bn1 = nn.BatchNorm1d(256)
+        self.pool1 = nn.MaxPool1d(kernel_size=5, stride=2, padding=2)
+        
+        self.conv2 = nn.Conv1d(256, 256, kernel_size=5, stride=1, padding=2)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.pool2 = nn.MaxPool1d(kernel_size=5, stride=2, padding=2)
+        
+        self.conv3 = nn.Conv1d(256, 128, kernel_size=5, stride=1, padding=2)
+        self.bn3 = nn.BatchNorm1d(128)
+        self.pool3 = nn.MaxPool1d(kernel_size=5, stride=2, padding=2)
+        self.dropout3 = nn.Dropout(0.3)
+        
+        # Adjust LSTM input size based on the output from CNN layers
+        self.lstm = nn.LSTM(input_size=128, hidden_size=64, num_layers=2, batch_first=True, bidirectional=True)
+        self.flatten = nn.Flatten()
+        
+        # Calculate the input size for the fully connected layer
+        self.fc1 = nn.Linear(2944, 128)  # Adjust the input dimension based on your data
+        self.dropout4 = nn.Dropout(0.4)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 7)  # Adjust output dimension based on the number of classes
+
+    def forward(self, x):
+        x = self.pool1(nn.ReLU()(self.bn1(self.conv1(x))))
+        x = self.pool2(nn.ReLU()(self.bn2(self.conv2(x))))
+        x = self.pool3(nn.ReLU()(self.bn3(self.conv3(x))))
+        x = self.dropout3(x)
+        
+        # Reshape for LSTM
+        x = x.permute(0, 2, 1)  # (batch_size, sequence_length, input_size)
+        x, _ = self.lstm(x)
+        
+        x = self.flatten(x)
+        x = nn.ReLU()(self.fc1(x))
+        x = self.dropout4(x)
+        x = nn.ReLU()(self.fc2(x))
+        x = self.fc3(x)  # No Softmax here
+        return x
+
+
+if SPEECH_MODEL_TYPE == "keras":
+    speech_model = tf.keras.models.load_model(SPEECH_MODEL_PATH)
+else:
+    speech_model = CNN_LSTMModel().to(device)
+    speech_model.load_state_dict(torch.load(SPEECH_MODEL_PATH, map_location=device))
+    speech_model.eval()
+
+
 class ConvolutionalModel(nn.Module):
     def __init__(self, vocab_size, output_size):
         super(ConvolutionalModel, self).__init__()
@@ -144,35 +219,47 @@ class ConvolutionalModel(nn.Module):
 
         return output
 
-speech_model = tf.keras.models.load_model(SPEECH_MODEL_PATH)
-
 vocab_size = len(vocab2index) # - 2 for "UNK" and ""
-text_model = ConvolutionalModel(vocab_size, output_size=len(emotions_dict)).to(device)
-text_model.load_state_dict(torch.load(TEXT_MODEL_PATH))
-text_model.eval()
+if TEXT_MODEL_TYPE == "keras":
+    text_model = tf.keras.models.load_model(TEXT_MODEL_PATH)
+else:
+    text_model = ConvolutionalModel(vocab_size, output_size=len(emotions_dict)).to(device)
+    text_model.load_state_dict(torch.load(TEXT_MODEL_PATH, map_location=device))
+    text_model.eval()
 
 
 def predict(speech_model, text_model, wav_file):
     # speech model predict
     X = []
     speech_feature = get_features(wav_file)
-    for ele in speech_feature:
-        X.append(ele)
+    X.extend(speech_feature)
     
     Features = np.array(X)
     Features = Features.reshape(-1, len(Features))
     scaled_features = scaler.transform(Features)
-    predicted = speech_model.predict(scaled_features)
-    emotion_by_speech = tf.argmax(predicted, axis=1)
+    scaled_features = np.expand_dims(Features, axis=1)
+    if SPEECH_MODEL_TYPE == "keras":
+        predicted = speech_model.predict(scaled_features)
+        emotion_by_speech = tf.argmax(predicted, axis=1)
+        emotion_by_speech = emotion_by_speech[0].numpy()
+    else:
+        predicted = speech_model(torch.tensor(scaled_features, dtype=torch.float32).to(device))
+        _, emotion_by_speech = torch.max(predicted.data, axis=1)
+        emotion_by_speech = emotion_by_speech.cpu().numpy()[0]
 
     text_from_speech = convert_speech_to_text(wav_file)
-    # text_from_speech = "Remember to Submit your Assignment"
     encoded_text = np.array(encode_sentence(text_from_speech, vocab2index, max_len=128))
     encoded_text = encoded_text.reshape(-1, len(encoded_text))
-    predicted = text_model(torch.tensor(encoded_text).to(device))
-    _, emotion_by_text = torch.max(predicted.data, axis=1)
+    if TEXT_MODEL_TYPE == "keras":
+        predicted = text_model.predict(encoded_text)
+        emotion_by_text = tf.argmax(predicted, axis=1)
+        emotion_by_text = emotion_by_text[0].numpy()
+    else:
+        predicted = text_model(torch.tensor(encoded_text).to(device))
+        _, emotion_by_text = torch.max(predicted.data, axis=1)
+        emotion_by_text = emotion_by_text.cpu().numpy()[0]
 
-    return emotion_by_speech[0].numpy(), emotion_by_text.cpu().numpy()[0]
+    return emotion_by_speech, emotion_by_text
 
 
 def confusion_matrix_visualize(conf_mat, title, filename):
