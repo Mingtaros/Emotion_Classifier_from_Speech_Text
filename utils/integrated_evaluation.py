@@ -1,5 +1,7 @@
 import json
 import glob
+import nltk
+import string
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,19 +16,29 @@ from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from nltk import word_tokenize
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+
+stop_words = stopwords.words('english')
+lemmatizer = WordNetLemmatizer()
+
 from device_utils import check_gpu
 from speech_to_text import convert_speech_to_text
-# evaluate the overall system
+
 
 # initialize necessary models
 JUSTIN_REFERENCE_FILE = "./justin_recording/justin_2024.csv"
 SCALER_PATH = "./models/scaler.pkl"
 SPEECH_MODEL_PATH = "./models/best_speech_model.pth"
 SPEECH_MODEL_POSNEG_PATH = "./models/best_posneg_speech_model.pth"
-# TEXT_MODEL_PATH = "./models/torch_text_linear_model_2024.06.20.01.19.14.pth"
+# TEXT_MODEL_PATH = "./models/torch_text_linear_model_2024.06.20.15.39.49.pth"
 TEXT_MODEL_PATH = "./models/torch_text_cnn_model_2024.06.20.12.20.41.pth"
 TEXT_MODEL_TYPE = "pytorch" # change to `pytorch` if using pytorch model, `keras` for keras model
-VOCAB2INDEX_PATH = "./models/vocab2index.json"
+VOCAB2INDEX_PATH = "./models/vocab2index_built.json"
+
+MAX_ENCODED_LEN = 20
+# MAX_ENCODED_LEN = 70
 
 # read data
 justin_reference = pd.read_csv(JUSTIN_REFERENCE_FILE)
@@ -111,16 +123,6 @@ def get_features(path):
 
 
 # text preprocessing
-import nltk
-import string
-from nltk import word_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-
-stop_words = stopwords.words('english')
-lemmatizer = WordNetLemmatizer()
-
-
 def clean_text(text):
     # remove punctuation
     text = text.translate(str.maketrans('', '', string.punctuation))
@@ -235,18 +237,25 @@ speech_model.load_state_dict(torch.load(SPEECH_MODEL_PATH, map_location=device))
 speech_model.eval()
 
 class SimpleLinearModel(nn.Module):
-    def __init__(self, vocab_size, input_size, output_size):
+    def __init__(self, vocab_size, input_size, output_size, embedding_matrix=None, freeze_embeddings=True):
         super(SimpleLinearModel, self).__init__()
 
         self.vocab_size = vocab_size
+        self.embedding_dim = 100
 
-        self.embedding = nn.Embedding(vocab_size, embedding_dim=128)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim=self.embedding_dim)
+        if embedding_matrix is not None:
+            self.embedding.weight = nn.Parameter(embedding_matrix)
 
-        self.linear_size = input_size * 128
-        self.linear1 = nn.Linear(self.linear_size, 128)
-        self.linear2 = nn.Linear(128, 64)
-        self.dropout1 = nn.Dropout(0.5)
-        self.linear3 = nn.Linear(64, output_size)
+        if freeze_embeddings:
+            self.embedding.weight.requires_grad = False
+
+        self.linear_size = input_size * self.embedding_dim
+        self.linear1 = nn.Linear(self.linear_size, 512)
+        self.linear2 = nn.Linear(512, 128)
+        self.linear3 = nn.Linear(128, 64)
+        self.dropout1 = nn.Dropout(0.2)
+        self.linear4 = nn.Linear(64, output_size)
 
 
     def forward(self, inputs):
@@ -254,8 +263,9 @@ class SimpleLinearModel(nn.Module):
         output = self.embedding(inputs).view(-1, self.linear_size)
         output = F.relu(self.linear1(output))
         output = F.relu(self.linear2(output))
+        output = F.relu(self.linear3(output))
         output = self.dropout1(output)
-        output = self.linear3(output)
+        output = self.linear4(output)
 
         return output
 
@@ -286,15 +296,16 @@ class ConvolutionalModel(nn.Module):
         output = self.dropout1(output).view(-1, self.linear_size)
         output = F.relu(self.linear1(output))
         output = self.dropout2(output)
-        output = self.linear2(output) # no need softmax
+        output = self.linear2(output) # no need sigmoid
 
         return output
 
-vocab_size = len(vocab2index) # - 2 for "UNK" and ""
+
+vocab_size = len(vocab2index) # + 2 for "UNK" and ""
 if TEXT_MODEL_TYPE == "keras":
     text_model = tf.keras.models.load_model(TEXT_MODEL_PATH)
 else:
-    # text_model = SimpleLinearModel(vocab_size, input_size=20, output_size=1).to(device)
+    # text_model = SimpleLinearModel(vocab_size, input_size=MAX_ENCODED_LEN, output_size=1).to(device)
     text_model = ConvolutionalModel(vocab_size, output_size=1).to(device)
     text_model.load_state_dict(torch.load(TEXT_MODEL_PATH, map_location=device))
     text_model.eval()
@@ -330,7 +341,7 @@ def predict(speech_model, text_model, wav_file, text_in_wav=None):
         text_in_wav = convert_speech_to_text(wav_file)
     
     text_in_wav = clean_text(text_in_wav)
-    text_in_wav = encode_sentence(text_in_wav, vocab2index, max_len=20)
+    text_in_wav = encode_sentence(text_in_wav, vocab2index, max_len=MAX_ENCODED_LEN)
 
     encoded_text = np.array(text_in_wav)
     encoded_text = encoded_text.reshape(-1, len(encoded_text))
@@ -359,8 +370,6 @@ def combined_model_pred(speech_proba, text_proba, cutoff, speech_weight=1, text_
     final_proba = (speech_proba * speech_weight) + (text_proba * text_weight)
     final_proba /= (speech_weight + text_weight)
 
-    print(speech_proba, text_proba, final_proba)
-
     if final_proba >= cutoff:
         return 1
     else:
@@ -372,7 +381,7 @@ def eval(speech_model, text_model):
 
     prediction_result = []
 
-    for justin_filename, justin_text, justin_emotion, justin_emotion_pos_neg in justin_reference[["FileName", "Text", "Emotion", "Emotion_Pos_Neg"]].values:
+    for justin_filename, justin_text, justin_emotion_pos_neg in justin_reference[["FileName", "Text", "Emotion_Pos_Neg"]].values:
         # get readable filename
         justin_speech = f"justin_recording/{justin_filename}.wav"
         posneg_label = justin_emotion_pos_neg
@@ -426,12 +435,4 @@ def eval(speech_model, text_model):
 
 
 if __name__ == "__main__":
-    # wav_file = "emotion-speech-dataset/augmented/remember.wav"
-
-    # emotion_by_speech, emotion_by_text = predict(speech_model, text_model, wav_file)
-
-    # print(emotion_by_speech, emotion_by_text)
-    # print("Speech:", emotions_dict[emotion_by_speech])
-    # print("Text  :", emotions_dict[emotion_by_text])
-
     eval(speech_model, text_model)
