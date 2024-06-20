@@ -23,6 +23,7 @@ JUSTIN_REFERENCE_FILE = "./justin_recording/justin_2024.csv"
 SCALER_PATH = "./models/scaler.pkl"
 SPEECH_MODEL_PATH = "./models/best_speech_model.pth"
 SPEECH_MODEL_POSNEG_PATH = "./models/best_posneg_speech_model.pth"
+# TEXT_MODEL_PATH = "./models/torch_text_linear_model_2024.06.20.01.19.14.pth"
 TEXT_MODEL_PATH = "./models/torch_text_cnn_model_2024.06.20.12.20.41.pth"
 TEXT_MODEL_TYPE = "pytorch" # change to `pytorch` if using pytorch model, `keras` for keras model
 VOCAB2INDEX_PATH = "./models/vocab2index.json"
@@ -30,7 +31,7 @@ VOCAB2INDEX_PATH = "./models/vocab2index.json"
 # read data
 justin_reference = pd.read_csv(JUSTIN_REFERENCE_FILE)
 # remove disgust
-justin_reference = justin_reference[justin_reference["Emotion"] != "disgust"]
+# justin_reference = justin_reference[justin_reference["Emotion"] != "disgust"]
 
 
 # PREPROCESSORS
@@ -100,14 +101,37 @@ def extract_features(data, sample_rate):
 
 def get_features(path):
     # duration and offset are used to take care of the no audio in start and the ending of each audio files as seen above.
-    data, sample_rate = librosa.load(path, duration=2.5, offset=0.6)
-    
+    data, sample_rate = librosa.load(path)
+
     # without augmentation
     res1 = extract_features(data, sample_rate)
     result = np.array(res1)
 
     return result
 
+
+# text preprocessing
+import nltk
+import string
+from nltk import word_tokenize
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+
+stop_words = stopwords.words('english')
+lemmatizer = WordNetLemmatizer()
+
+
+def clean_text(text):
+    # remove punctuation
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    text = word_tokenize(text)
+    # remove stopwords
+    text = [token for token in text if token not in stop_words]
+    # lemmatizer
+    text = [lemmatizer.lemmatize(token) for token in text]
+
+    # return detokenizer.detokenize(text).strip()
+    return text
 
 with open(VOCAB2INDEX_PATH, 'r') as f:
     vocab2index = json.load(f)
@@ -210,53 +234,6 @@ speech_model = CNN_LSTMModel().to(device)
 speech_model.load_state_dict(torch.load(SPEECH_MODEL_PATH, map_location=device))
 speech_model.eval()
 
-class CNN_LSTMModelPosNeg(nn.Module):
-    def __init__(self):
-        super(CNN_LSTMModelPosNeg, self).__init__()
-        self.conv1 = nn.Conv1d(1, 256, kernel_size=5, stride=1, padding=2)
-        self.bn1 = nn.BatchNorm1d(256)
-        self.pool1 = nn.MaxPool1d(kernel_size=5, stride=2, padding=2)
-        
-        self.conv2 = nn.Conv1d(256, 256, kernel_size=5, stride=1, padding=2)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.pool2 = nn.MaxPool1d(kernel_size=5, stride=2, padding=2)
-        
-        self.conv3 = nn.Conv1d(256, 128, kernel_size=5, stride=1, padding=2)
-        self.bn3 = nn.BatchNorm1d(128)
-        self.pool3 = nn.MaxPool1d(kernel_size=5, stride=2, padding=2)
-        self.dropout3 = nn.Dropout(0.3)
-        
-        # Adjust LSTM input size based on the output from CNN layers
-        self.lstm = nn.LSTM(input_size=128, hidden_size=64, num_layers=2, batch_first=True, bidirectional=True)
-        self.flatten = nn.Flatten()
-        
-        # Calculate the input size for the fully connected layer
-        self.fc1 = nn.Linear(2944, 128)  # Adjust the input dimension based on your data
-        self.dropout4 = nn.Dropout(0.4)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 7)  # Adjust output dimension based on the number of classes
-
-    def forward(self, x):
-        x = self.pool1(nn.ReLU()(self.bn1(self.conv1(x))))
-        x = self.pool2(nn.ReLU()(self.bn2(self.conv2(x))))
-        x = self.pool3(nn.ReLU()(self.bn3(self.conv3(x))))
-        x = self.dropout3(x)
-        
-        # Reshape for LSTM
-        x = x.permute(0, 2, 1)  # (batch_size, sequence_length, input_size)
-        x, _ = self.lstm(x)
-        
-        x = self.flatten(x)
-        x = nn.ReLU()(self.fc1(x))
-        x = self.dropout4(x)
-        x = nn.ReLU()(self.fc2(x))
-        x = torch.sigmoid(self.fc3(x))  # Sigmoid activation for binary classification
-        return x
-
-speech_model_posneg = CNN_LSTMModelPosNeg().to(device)
-speech_model_posneg.load_state_dict(torch.load(SPEECH_MODEL_POSNEG_PATH, map_location=device))
-speech_model_posneg.eval()
-
 class SimpleLinearModel(nn.Module):
     def __init__(self, vocab_size, input_size, output_size):
         super(SimpleLinearModel, self).__init__()
@@ -334,36 +311,37 @@ def predict(speech_model, text_model, wav_file, text_in_wav=None):
     scaled_features = scaler.transform(Features)
     scaled_features = np.expand_dims(Features, axis=1)
 
-    # speech normal
+    # speech
     predicted = speech_model(torch.tensor(scaled_features, dtype=torch.float32).to(device))
-    _, emotion_by_speech = torch.max(predicted.data, axis=1)
+    emotion_proba, emotion_by_speech = torch.max(F.softmax(predicted.data, dim=1), axis=1)
     emotion_by_speech = emotion_by_speech.cpu().numpy()[0]
-
-    # speech posneg
-    # predicted = speech_model_posneg(torch.tensor(scaled_features, dtype=torch.float32).to(device))
-    # posneg_by_speech = torch.round(F.sigmoid(predicted.data))
-    # print(posneg_by_speech)
-    # posneg_by_speech = int(posneg_by_speech.cpu().numpy()[0])
-    posneg_by_speech = 0 # placeholder
+    # map it to either positive or negative
+    emotion_by_speech = emotion_to_posneg[emotions_dict[emotion_by_speech]]
+    if emotion_by_speech == 1:
+        speech_proba = emotion_proba
+    else:
+        speech_proba = 1 - emotion_proba
+    
+    speech_proba = speech_proba.cpu().numpy()[0]
 
     # text
     if not text_in_wav:
         # if there's no text, extract
         text_in_wav = convert_speech_to_text(wav_file)
+    
+    text_in_wav = clean_text(text_in_wav)
+    text_in_wav = encode_sentence(text_in_wav, vocab2index, max_len=20)
 
-    encoded_text = np.array(encode_sentence(text_in_wav, vocab2index, max_len=20))
+    encoded_text = np.array(text_in_wav)
     encoded_text = encoded_text.reshape(-1, len(encoded_text))
-    if TEXT_MODEL_TYPE == "keras":
-        predicted = text_model.predict(encoded_text)
-        emotion_by_text = tf.argmax(predicted, axis=1)
-        emotion_by_text = emotion_by_text[0].numpy()
-    else:
-        predicted = text_model(torch.tensor(encoded_text).to(device))
-        predicted = predicted.squeeze(-1)
-        emotion_by_text = torch.round(F.sigmoid(predicted.data))
-        emotion_by_text = int(emotion_by_text.cpu().numpy()[0])
 
-    return emotion_by_speech, posneg_by_speech, emotion_by_text
+    predicted = text_model(torch.tensor(encoded_text).to(device))
+    predicted = predicted.squeeze(-1)
+    emotion_by_text = torch.round(F.sigmoid(predicted.data))
+    emotion_by_text = int(emotion_by_text.cpu().numpy()[0])
+    text_proba = F.sigmoid(predicted.data).cpu().numpy()[0]
+
+    return emotion_by_speech, speech_proba, emotion_by_text, text_proba
 
 
 def confusion_matrix_visualize(conf_mat, title, filename, index_column_values=emotions_dict.values()):
@@ -374,6 +352,19 @@ def confusion_matrix_visualize(conf_mat, title, filename, index_column_values=em
     plt.title(title)
     # plt.show()
     plt.savefig(filename)
+    plt.close()
+
+
+def combined_model_pred(speech_proba, text_proba, cutoff, speech_weight=1, text_weight=1):
+    final_proba = (speech_proba * speech_weight) + (text_proba * text_weight)
+    final_proba /= (speech_weight + text_weight)
+
+    print(speech_proba, text_proba, final_proba)
+
+    if final_proba >= cutoff:
+        return 1
+    else:
+        return 0
 
 
 def eval(speech_model, text_model):
@@ -384,51 +375,51 @@ def eval(speech_model, text_model):
     for justin_filename, justin_text, justin_emotion, justin_emotion_pos_neg in justin_reference[["FileName", "Text", "Emotion", "Emotion_Pos_Neg"]].values:
         # get readable filename
         justin_speech = f"justin_recording/{justin_filename}.wav"
-        # label = justin_speech.split("_")[-1].replace(".wav", "")
-        emotion_label = justin_emotion
-        label_encoded = reverse_emotions_dict[emotion_label]
-
         posneg_label = justin_emotion_pos_neg
         posneg_label_encoded = posneg_to_num[posneg_label]
 
         print(justin_speech)
-        speech_pred, speech_posneg_pred, text_pred = predict(speech_model, text_model, justin_speech, justin_text)
+        speech_pred, speech_proba, text_pred, text_proba = predict(speech_model, text_model, justin_speech, justin_text)
 
         prediction_result.append({
             "filename": justin_speech.split("/")[-1],
-            "label": emotion_label,
-            "label_encoded": label_encoded,
             "posneg_label": posneg_label,
             "posneg_label_encoded": posneg_label_encoded,
-            "speech_prediction": emotions_dict[speech_pred],
+            "speech_prediction": num_to_posneg[speech_pred],
             "speech_prediction_encoded": speech_pred,
-            "speech_posneg_prediction": num_to_posneg[speech_posneg_pred],
-            "speech_posneg_prediction_encoded": speech_posneg_pred,
+            "speech_proba": speech_proba,
             "text_prediction": num_to_posneg[text_pred],
             "text_prediction_encoded": text_pred,
+            "text_proba": text_proba,
         })
     
     prediction_result = pd.DataFrame(prediction_result)
     # get performance measures
-    speech_report = classification_report(prediction_result["label_encoded"], prediction_result["speech_prediction_encoded"], target_names=emotion_to_posneg.keys())
-    speech_conf_mat = confusion_matrix(prediction_result["label_encoded"], prediction_result["speech_prediction_encoded"])
-
-    speech_posneg_report = classification_report(prediction_result["posneg_label_encoded"], prediction_result["speech_posneg_prediction_encoded"], target_names=posneg_to_num.keys())
-    speech_posneg_conf_mat = confusion_matrix(prediction_result["posneg_label_encoded"], prediction_result["speech_posneg_prediction_encoded"])
+    speech_report = classification_report(prediction_result["posneg_label_encoded"], prediction_result["speech_prediction_encoded"], target_names=posneg_to_num.keys())
+    speech_conf_mat = confusion_matrix(prediction_result["posneg_label_encoded"], prediction_result["speech_prediction_encoded"])
 
     text_report = classification_report(prediction_result["posneg_label_encoded"], prediction_result["text_prediction_encoded"], target_names=posneg_to_num.keys())
     text_conf_mat = confusion_matrix(prediction_result["posneg_label_encoded"], prediction_result["text_prediction_encoded"])
 
-    print("========Speech Model Performance=======")
-    print(speech_report)
-    print("====Speech PosNeg Model Performance====")
-    print(speech_posneg_report)
-    print("========Text Model Performance=========")
-    print(text_report)
+    combined_pred = [
+        combined_model_pred(speech_proba, text_proba, cutoff=0.5)
+        for speech_proba, text_proba
+        in prediction_result[["speech_proba", "text_proba"]].values
+    ]
 
-    confusion_matrix_visualize(speech_conf_mat, "Speech Model Confusion Matrix", "speech_conf_mat.png", emotion_to_posneg.keys())
-    confusion_matrix_visualize(speech_posneg_conf_mat, "Speech Model PosNeg Confusion Matrix", "speech_posneg_mat.png", posneg_to_num.keys())
+    combined_report = classification_report(prediction_result["posneg_label_encoded"], combined_pred, target_names=posneg_to_num.keys())
+    combined_conf_mat = confusion_matrix(prediction_result["posneg_label_encoded"], combined_pred)
+
+    print("=======Speech Model Performance=======")
+    print(speech_report)
+    print("========Text Model Performance========")
+    print(text_report)
+    print("======Combined Model Performance======")
+    print(combined_report)
+
+    confusion_matrix_visualize(speech_conf_mat, "Speech Model Confusion Matrix", "speech_conf_mat.png", posneg_to_num.keys())
     confusion_matrix_visualize(text_conf_mat, "Text Model Confusion Matrix", "text_conf_mat.png", posneg_to_num.keys())
+    confusion_matrix_visualize(combined_conf_mat, "Combined Model Confusion Matrix", "combined_conf_mat.png", posneg_to_num.keys())
     
     # save prediction result
     prediction_result.to_csv("justin_prediction_result.csv", index=False)
