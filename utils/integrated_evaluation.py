@@ -30,10 +30,8 @@ from speech_to_text import convert_speech_to_text
 # initialize necessary models
 JUSTIN_REFERENCE_FILE = "./justin_recording/justin_2024.csv"
 SCALER_PATH = "./models/scaler.pkl"
-SPEECH_MODEL_PATH = "./models/best_speech_model.pth"
-SPEECH_MODEL_POSNEG_PATH = "./models/best_posneg_speech_model.pth"
+SPEECH_MODEL_PATH = "./models/best_posneg_speech_model.pth"
 TEXT_MODEL_PATH = "./models/torch_text_cnn_model_2024.06.20.12.20.41.pth"
-TEXT_MODEL_TYPE = "pytorch" # change to `pytorch` if using pytorch model, `keras` for keras model
 VOCAB2INDEX_PATH = "./models/vocab2index_built.json"
 
 MAX_ENCODED_LEN = 20
@@ -145,43 +143,14 @@ def encode_sentence(text, vocab2index, max_len=128):
 
 
 # PREDICTION MODELS
-emotions_dict = {
-    0: 'surprised',
-    1: 'neutral',
-    2: 'happy',
-    3: 'sad',
-    4: 'angry',
-    5: 'fearful',
-    6: 'disgust'
-}
-
-reverse_emotions_dict = {
-    'surprised': 0,
-    'neutral': 1,
-    'happy': 2,
-    'sad': 3,
-    'angry': 4,
-    'fearful': 5,
-    'disgust': 6
-}
-
-emotion_to_posneg = {
-    'surprised': 1,
-    'neutral': 1,
-    'happy': 1,
-    'sad': 0,
-    'angry': 0,
-    'fearful': 0
-}
-
 num_to_posneg = {
     0: "negative",
-    1: "positive"
+    1: "positive",
 }
 
 posneg_to_num = {
     "negative": 0,
-    "positive": 1
+    "positive": 1,
 }
 
 device = check_gpu()
@@ -210,7 +179,7 @@ class CNN_LSTMModel(nn.Module):
         self.fc1 = nn.Linear(2944, 128)  # Adjust the input dimension based on your data
         self.dropout4 = nn.Dropout(0.4)
         self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 7)  # Adjust output dimension based on the number of classes
+        self.fc3 = nn.Linear(64, 1)  # Adjust output dimension based on the number of classes
 
     def forward(self, x):
         x = self.pool1(nn.ReLU()(self.bn1(self.conv1(x))))
@@ -226,45 +195,14 @@ class CNN_LSTMModel(nn.Module):
         x = nn.ReLU()(self.fc1(x))
         x = self.dropout4(x)
         x = nn.ReLU()(self.fc2(x))
-        x = self.fc3(x)  # No Softmax here
+        x = torch.sigmoid(self.fc3(x))  # Sigmoid activation for binary classification
         return x
+
 
 speech_model = CNN_LSTMModel().to(device)
 speech_model.load_state_dict(torch.load(SPEECH_MODEL_PATH, map_location=device))
 speech_model.eval()
 
-class SimpleLinearModel(nn.Module):
-    def __init__(self, vocab_size, input_size, output_size, embedding_matrix=None, freeze_embeddings=True):
-        super(SimpleLinearModel, self).__init__()
-
-        self.vocab_size = vocab_size
-        self.embedding_dim = 100
-
-        self.embedding = nn.Embedding(vocab_size, embedding_dim=self.embedding_dim)
-        if embedding_matrix is not None:
-            self.embedding.weight = nn.Parameter(embedding_matrix)
-
-        if freeze_embeddings:
-            self.embedding.weight.requires_grad = False
-
-        self.linear_size = input_size * self.embedding_dim
-        self.linear1 = nn.Linear(self.linear_size, 512)
-        self.linear2 = nn.Linear(512, 128)
-        self.linear3 = nn.Linear(128, 64)
-        self.dropout1 = nn.Dropout(0.2)
-        self.linear4 = nn.Linear(64, output_size)
-
-
-    def forward(self, inputs):
-        # we assume the inputs already in embedding dimension
-        output = self.embedding(inputs).view(-1, self.linear_size)
-        output = F.relu(self.linear1(output))
-        output = F.relu(self.linear2(output))
-        output = F.relu(self.linear3(output))
-        output = self.dropout1(output)
-        output = self.linear4(output)
-
-        return output
 
 class ConvolutionalModel(nn.Module):
     def __init__(self, vocab_size, output_size):
@@ -299,13 +237,10 @@ class ConvolutionalModel(nn.Module):
 
 
 vocab_size = len(vocab2index) # + 2 for "UNK" and ""
-if TEXT_MODEL_TYPE == "keras":
-    text_model = tf.keras.models.load_model(TEXT_MODEL_PATH)
-else:
-    # text_model = SimpleLinearModel(vocab_size, input_size=MAX_ENCODED_LEN, output_size=1).to(device)
-    text_model = ConvolutionalModel(vocab_size, output_size=1).to(device)
-    text_model.load_state_dict(torch.load(TEXT_MODEL_PATH, map_location=device))
-    text_model.eval()
+
+text_model = ConvolutionalModel(vocab_size, output_size=1).to(device)
+text_model.load_state_dict(torch.load(TEXT_MODEL_PATH, map_location=device))
+text_model.eval()
 
 
 def predict(speech_model, text_model, wav_file, text_in_wav=None):
@@ -321,16 +256,10 @@ def predict(speech_model, text_model, wav_file, text_in_wav=None):
 
     # speech
     predicted = speech_model(torch.tensor(scaled_features, dtype=torch.float32).to(device))
-    emotion_proba, emotion_by_speech = torch.max(F.softmax(predicted.data, dim=1), axis=1)
-    emotion_by_speech = emotion_by_speech.cpu().numpy()[0]
-    # map it to either positive or negative
-    emotion_by_speech = emotion_to_posneg[emotions_dict[emotion_by_speech]]
-    if emotion_by_speech == 1:
-        speech_proba = emotion_proba
-    else:
-        speech_proba = 1 - emotion_proba
-    
-    speech_proba = speech_proba.cpu().numpy()[0]
+    predicted = predicted.squeeze(-1)
+    emotion_by_speech = torch.round(predicted.data) # sigmoid already applied in last layer
+    emotion_by_speech = int(emotion_by_speech.cpu().numpy()[0])
+    speech_proba = predicted.data.cpu().numpy()[0] # sigmoid already applied in last layer
 
     # text
     if not text_in_wav:
@@ -352,7 +281,7 @@ def predict(speech_model, text_model, wav_file, text_in_wav=None):
     return emotion_by_speech, speech_proba, emotion_by_text, text_proba
 
 
-def confusion_matrix_visualize(conf_mat, title, filename, index_column_values=emotions_dict.values()):
+def confusion_matrix_visualize(conf_mat, title, filename, index_column_values=num_to_posneg.values()):
     cm = pd.DataFrame(conf_mat, index=index_column_values, columns=index_column_values)
     sns.heatmap(cm, annot=True)
     plt.xlabel("Predicted")
@@ -363,7 +292,7 @@ def confusion_matrix_visualize(conf_mat, title, filename, index_column_values=em
     plt.close()
 
 
-def combined_model_pred(speech_proba, text_proba, cutoff, speech_weight=1, text_weight=1):
+def combined_model_pred(speech_proba, text_proba, cutoff=0.5, speech_weight=1, text_weight=1):
     final_proba = (speech_proba * speech_weight) + (text_proba * text_weight)
     final_proba /= (speech_weight + text_weight)
 
