@@ -27,12 +27,13 @@ def check_gpu():
     if is_cuda:
         device = torch.device("cuda")
         print("GPU is available")
+    elif is_mps:
+        device = torch.device("mps")
+        print("MPS is available")
     else:
-        if is_mps:
-            device = torch.device("mps")
-        else:
-            device = torch.device("cpu")
-            print("GPU not available, CPU used")
+        device = torch.device("cpu")
+        print("GPU and MPS not available, CPU used")
+
     return device
 
 

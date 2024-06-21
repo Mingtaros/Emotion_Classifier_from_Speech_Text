@@ -32,7 +32,6 @@ JUSTIN_REFERENCE_FILE = "./justin_recording/justin_2024.csv"
 SCALER_PATH = "./models/scaler.pkl"
 SPEECH_MODEL_PATH = "./models/best_speech_model.pth"
 SPEECH_MODEL_POSNEG_PATH = "./models/best_posneg_speech_model.pth"
-# TEXT_MODEL_PATH = "./models/torch_text_linear_model_2024.06.20.15.39.49.pth"
 TEXT_MODEL_PATH = "./models/torch_text_cnn_model_2024.06.20.12.20.41.pth"
 TEXT_MODEL_TYPE = "pytorch" # change to `pytorch` if using pytorch model, `keras` for keras model
 VOCAB2INDEX_PATH = "./models/vocab2index_built.json"
@@ -42,8 +41,6 @@ MAX_ENCODED_LEN = 20
 
 # read data
 justin_reference = pd.read_csv(JUSTIN_REFERENCE_FILE)
-# remove disgust
-# justin_reference = justin_reference[justin_reference["Emotion"] != "disgust"]
 
 
 # PREPROCESSORS
@@ -370,10 +367,7 @@ def combined_model_pred(speech_proba, text_proba, cutoff, speech_weight=1, text_
     final_proba = (speech_proba * speech_weight) + (text_proba * text_weight)
     final_proba /= (speech_weight + text_weight)
 
-    if final_proba >= cutoff:
-        return 1
-    else:
-        return 0
+    return 1 if final_proba >= cutoff else 0
 
 
 def eval(speech_model, text_model):
@@ -415,6 +409,9 @@ def eval(speech_model, text_model):
         for speech_proba, text_proba
         in prediction_result[["speech_proba", "text_proba"]].values
     ]
+
+    prediction_result["combined_prediction"] = [num_to_posneg[x] for x in combined_pred]
+    prediction_result["combined_prediction_encoded"] = combined_pred
 
     combined_report = classification_report(prediction_result["posneg_label_encoded"], combined_pred, target_names=posneg_to_num.keys())
     combined_conf_mat = confusion_matrix(prediction_result["posneg_label_encoded"], combined_pred)
