@@ -15,9 +15,3 @@ if __name__ == "__main__":
     filename = "justin_recording/Recording_28_surprised.wav"
     text = convert_speech_to_text(filename)
     print(filename, "\n", text, "\n")
-    # for filename in glob.glob("justin_recording/*.wav"):
-    #     try:
-    #         text = convert_speech_to_text(filename)
-    #         print(filename, "\n", text, "\n")
-    #     except:
-    #         print(filename)
