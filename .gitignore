@@ -162,12 +162,10 @@ cython_debug/
 #.idea/
 
 emotion-speech-dataset/*
+justin_recording/
 output/*
 !emotion-speech-dataset/*/.gitkeep
 emotion-text-dataset/*.csv
 !emotion-text-dataset/.gitkeep
 models/*
 !models/.gitkeep
-predicted_vs_actual_task2.csv
-predicted_vs_actual_task1.csv
-predicted_vs_actual.csv
