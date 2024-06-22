@@ -12,7 +12,7 @@ import tensorflow as tf
 import librosa
 
 from tqdm import tqdm
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, f1_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -39,6 +39,8 @@ MAX_ENCODED_LEN = 20
 
 # read data
 justin_reference = pd.read_csv(JUSTIN_REFERENCE_FILE)
+# remove disgust
+justin_reference = justin_reference[justin_reference["Emotion"] != "disgust"]
 
 
 # PREPROCESSORS
@@ -329,12 +331,21 @@ def eval(speech_model, text_model):
     # get performance measures
     speech_report = classification_report(prediction_result["posneg_label_encoded"], prediction_result["speech_prediction_encoded"], target_names=posneg_to_num.keys())
     speech_conf_mat = confusion_matrix(prediction_result["posneg_label_encoded"], prediction_result["speech_prediction_encoded"])
+    speech_f1 = f1_score(prediction_result["posneg_label_encoded"], prediction_result["speech_prediction_encoded"])
 
     text_report = classification_report(prediction_result["posneg_label_encoded"], prediction_result["text_prediction_encoded"], target_names=posneg_to_num.keys())
     text_conf_mat = confusion_matrix(prediction_result["posneg_label_encoded"], prediction_result["text_prediction_encoded"])
+    text_f1 = f1_score(prediction_result["posneg_label_encoded"], prediction_result["text_prediction_encoded"])
 
     combined_pred = [
-        combined_model_pred(speech_proba, text_proba, cutoff=0.5)
+        # use F1 score as weight
+        combined_model_pred(
+            speech_proba,
+            text_proba,
+            cutoff=0.5,
+            speech_weight=speech_f1,
+            text_weight=text_f1
+        )
         for speech_proba, text_proba
         in prediction_result[["speech_proba", "text_proba"]].values
     ]
