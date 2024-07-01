@@ -2,8 +2,6 @@ import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 import json
-import glob
-import nltk
 import string
 import torch
 import torch.nn as nn
@@ -11,10 +9,8 @@ import torch.nn.functional as F
 import joblib
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 import librosa
 
-from tqdm import tqdm
 from sklearn.metrics import confusion_matrix, classification_report, f1_score
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -38,7 +34,6 @@ TEXT_MODEL_PATH = "./models/text_models/torch_text_cnn_model_2024.06.20.12.20.41
 VOCAB2INDEX_PATH = "./models/vocab2index_built.json"
 
 MAX_ENCODED_LEN = 20
-# MAX_ENCODED_LEN = 70
 
 # read data
 justin_reference = pd.read_excel(JUSTIN_REFERENCE_FILE)
@@ -255,7 +250,7 @@ class ConvolutionalModel(nn.Module):
         return output
 
 
-vocab_size = len(vocab2index) # + 2 for "UNK" and ""
+vocab_size = len(vocab2index)
 
 text_model = ConvolutionalModel(vocab_size, output_size=1).to(device)
 text_model.load_state_dict(torch.load(TEXT_MODEL_PATH, map_location=device))
@@ -306,7 +301,6 @@ def confusion_matrix_visualize(conf_mat, title, filename, index_column_values=nu
     plt.xlabel("Predicted")
     plt.ylabel("Actual")
     plt.title(title)
-    # plt.show()
     plt.savefig(filename)
     plt.close()
 
@@ -383,9 +377,9 @@ def eval(speech_model, text_model):
     confusion_matrix_visualize(speech_conf_mat, "Speech Model Confusion Matrix", "speech_conf_mat.png", posneg_to_num.keys())
     confusion_matrix_visualize(text_conf_mat, "Text Model Confusion Matrix", "text_conf_mat.png", posneg_to_num.keys())
     confusion_matrix_visualize(combined_conf_mat, "Combined Model Confusion Matrix", "combined_conf_mat.png", posneg_to_num.keys())
-    
+
     # save prediction result
-    prediction_result.to_csv("justin_prediction_result.csv", index=False)
+    prediction_result.to_csv("prediction_result.csv", index=False)
 
 
 if __name__ == "__main__":
