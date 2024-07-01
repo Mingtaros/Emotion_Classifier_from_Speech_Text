@@ -1,3 +1,6 @@
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import json
 import glob
 import nltk
@@ -28,17 +31,17 @@ from speech_to_text import convert_speech_to_text
 
 
 # initialize necessary models
-JUSTIN_REFERENCE_FILE = "./justin_recording/justin_2024.csv"
+JUSTIN_REFERENCE_FILE = "./justin_recording/justin_2024.xlsx"
 SCALER_PATH = "./models/scaler.pkl"
-SPEECH_MODEL_PATH = "./models/best_posneg_speech_model.pth"
-TEXT_MODEL_PATH = "./models/torch_text_cnn_model_2024.06.20.12.20.41.pth"
+SPEECH_MODEL_PATH = "./models/speech_models/best_posneg_speech_model.pth"
+TEXT_MODEL_PATH = "./models/text_models/torch_text_cnn_model_2024.06.20.12.20.41.pth"
 VOCAB2INDEX_PATH = "./models/vocab2index_built.json"
 
 MAX_ENCODED_LEN = 20
 # MAX_ENCODED_LEN = 70
 
 # read data
-justin_reference = pd.read_csv(JUSTIN_REFERENCE_FILE)
+justin_reference = pd.read_excel(JUSTIN_REFERENCE_FILE)
 # remove disgust
 justin_reference = justin_reference[justin_reference["Emotion"] != "disgust"]
 
@@ -60,6 +63,18 @@ def shift(data):
 def pitch(data, sampling_rate, pitch_factor=0.7):
     return librosa.effects.pitch_shift(y=data, sr=sampling_rate, n_steps=pitch_factor)
 
+def remove_silence(data, sample_rate, top_db=20, n_fft=1024):
+
+    # Split the audio into non-silent intervals
+    intervals = librosa.effects.split(data, top_db=top_db)
+
+    # Concatenate non-silent intervals
+    non_silent_audio = np.concatenate([data[start:end] for start, end in intervals])
+    
+    if len(non_silent_audio) < n_fft:
+        non_silent_audio = np.pad(non_silent_audio, (0, n_fft - len(signal)), mode='constant')
+
+    return non_silent_audio
 
 def extract_features(data, sample_rate):
     features = []
@@ -111,6 +126,8 @@ def extract_features(data, sample_rate):
 def get_features(path):
     # duration and offset are used to take care of the no audio in start and the ending of each audio files as seen above.
     data, sample_rate = librosa.load(path)
+    
+    data = remove_silence(data, sample_rate)
 
     # without augmentation
     res1 = extract_features(data, sample_rate)
