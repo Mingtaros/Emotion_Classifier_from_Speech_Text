@@ -1,7 +1,5 @@
-# RAVDESS_Emotion_Detection
-Speech-based Emotion Classifier.
-
-## Setup
+# Emotion Classifier from Speech & Text
+Speech and text-based Emotion Classifier.
 
 ### Data
 - Download the RAVDESS dataset from https://www.kaggle.com/datasets/uwrfkaggler/ravdess-emotional-speech-audio
